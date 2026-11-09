@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Автоматизированный скрипт внедрения AyuGram в Telegram-iOS без хрупких git diff
+и с авто-настройкой параметров сборки для Make.py
 """
 
 import os
@@ -39,7 +40,6 @@ def patch_file(filepath, search_str, replace_str, description):
 
     if search_str not in content:
         log(f"ПРЕДУПРЕЖДЕНИЕ: Сигнатура не найдена в {os.path.basename(filepath)} ({description})")
-        # Если это Swift-файл, добавляем вспомогательный код в конец файла
         with open(filepath, "a", encoding="utf-8") as f:
             f.write("\n\n// MARK: - AyuGram Extension\n" + replace_str + "\n")
         log(f"Добавлено как расширение в {os.path.basename(filepath)}")
@@ -50,6 +50,41 @@ def patch_file(filepath, search_str, replace_str, description):
         f.write(new_content)
     log(f"Успешно модифицирован {os.path.basename(filepath)} ({description})")
     return True
+
+def setup_make_wrapper(target_repo):
+    make_py = os.path.join(target_repo, "build-system", "Make", "Make.py")
+    make_real = os.path.join(target_repo, "build-system", "Make", "Make.py.real")
+
+    if not os.path.isfile(make_real) and os.path.isfile(make_py):
+        shutil.copy2(make_py, make_real)
+        log("Создана копия оригинального Make.py")
+
+    wrapper_code = '''#!/usr/bin/env python3
+import os
+import sys
+import subprocess
+
+current_dir = os.path.dirname(os.path.abspath(__file__))
+real_make = os.path.join(current_dir, "Make.py.real")
+
+args = sys.argv[1:]
+if "generateProject" in args:
+    cmd = [
+        sys.executable,
+        real_make,
+        "generateProject",
+        "--configurationPath=build-system/template_minimal_development_configuration.json",
+        "--disableProvisioningProfiles"
+    ]
+    print("[Make-Wrapper] Автоматический запуск generateProject с корректной конфигурацией...")
+    sys.exit(subprocess.call(cmd))
+else:
+    sys.exit(subprocess.call([sys.executable, real_make] + args))
+'''
+    with open(make_py, "w", encoding="utf-8") as f:
+        f.write(wrapper_code)
+    os.chmod(make_py, 0o755)
+    log("Установлен интеллектуальный Make-Wrapper для автоматической сборки.")
 
 def apply_all_modifications(target_repo):
     # 1. Background modes в Info.plist
@@ -78,6 +113,9 @@ def apply_all_modifications(target_repo):
         "func application(_ application: UIApplication, didFinishLaunchingWithOptions" + "\n        AyuBackgroundKeeper.shared.start()",
         "Инициализация фонового удержания AyuGram"
     )
+
+    # 3. Настройка обертки сборочного скрипта
+    setup_make_wrapper(target_repo)
 
     log("Все модификации успешно применены!")
 
