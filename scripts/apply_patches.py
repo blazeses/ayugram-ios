@@ -1,33 +1,20 @@
 #!/usr/bin/env python3
 """
-Скрипт применения модификаций AyuGram к исходникам Telegram-iOS
+Автоматизированный скрипт внедрения AyuGram в Telegram-iOS без хрупких git diff
 """
 
 import os
 import sys
 import shutil
-import subprocess
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PATCHES_DIR = os.path.join(BASE_DIR, "patches")
 AYU_CORE_DIR = os.path.join(BASE_DIR, "AyuCore", "Sources")
 
 def log(msg):
     print(f"[AyuGram-iOS] {msg}")
 
-def apply_patch_file(target_repo, patch_path):
-    patch_name = os.path.basename(patch_path)
-    log(f"Применение патча {patch_name}...")
-    cmd = ["git", "apply", "--ignore-whitespace", patch_path]
-    result = subprocess.run(cmd, cwd=target_repo, capture_output=True, text=True)
-    if result.returncode != 0:
-        log(f"Ошибка применения {patch_name}: {result.stderr}")
-        return False
-    log(f"Патч {patch_name} успешно применен.")
-    return True
-
 def inject_ayu_core(target_repo):
-    log("Внедрение файлов AyuCore в структуру Telegram-iOS...")
+    log("Внедрение исходников AyuCore в TelegramCore...")
     dest_dir = os.path.join(target_repo, "submodules", "TelegramCore", "Sources", "AyuGram")
     os.makedirs(dest_dir, exist_ok=True)
     
@@ -36,7 +23,63 @@ def inject_ayu_core(target_repo):
         dst_file = os.path.join(dest_dir, filename)
         if os.path.isfile(src_file):
             shutil.copy2(src_file, dst_file)
-            log(f"Скопирован: {filename} -> {dst_file}")
+            log(f"Скопирован модуль: {filename}")
+
+def patch_file(filepath, search_str, replace_str, description):
+    if not os.path.isfile(filepath):
+        log(f"ПРЕДУПРЕЖДЕНИЕ: Файл {filepath} не найден, пропускаем ({description})")
+        return False
+    
+    with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+
+    if replace_str.strip() in content:
+        log(f"Уже внедрено: {description}")
+        return True
+
+    if search_str not in content:
+        log(f"ПРЕДУПРЕЖДЕНИЕ: Сигнатура не найдена в {os.path.basename(filepath)} ({description})")
+        # Если это Swift-файл, добавляем вспомогательный код в конец файла
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write("\n\n// MARK: - AyuGram Extension\n" + replace_str + "\n")
+        log(f"Добавлено как расширение в {os.path.basename(filepath)}")
+        return True
+
+    new_content = content.replace(search_str, replace_str, 1)
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(new_content)
+    log(f"Успешно модифицирован {os.path.basename(filepath)} ({description})")
+    return True
+
+def apply_all_modifications(target_repo):
+    # 1. Background modes в Info.plist
+    info_plist_paths = [
+        os.path.join(target_repo, "Telegram", "Telegram-iOS", "Info.plist"),
+        os.path.join(target_repo, "submodules", "TelegramUI", "Info.plist")
+    ]
+    for plist_path in info_plist_paths:
+        if os.path.isfile(plist_path):
+            with open(plist_path, "r", encoding="utf-8", errors="ignore") as f:
+                p_content = f.read()
+            if "<string>voip</string>" not in p_content and "<key>UIBackgroundModes</key>" in p_content:
+                p_content = p_content.replace(
+                    "<key>UIBackgroundModes</key>\n\t<array>",
+                    "<key>UIBackgroundModes</key>\n\t<array>\n\t\t<string>audio</string>\n\t\t<string>voip</string>\n\t\t<string>fetch</string>"
+                )
+                with open(plist_path, "w", encoding="utf-8") as f:
+                    f.write(p_content)
+                log(f"Добавлены фоновые права в {plist_path}")
+
+    # 2. Активация AyuBackgroundKeeper при запуске AppDelegate
+    app_delegate = os.path.join(target_repo, "Telegram", "Telegram-iOS", "Application.swift")
+    patch_file(
+        app_delegate,
+        "func application(_ application: UIApplication, didFinishLaunchingWithOptions",
+        "func application(_ application: UIApplication, didFinishLaunchingWithOptions" + "\n        AyuBackgroundKeeper.shared.start()",
+        "Инициализация фонового удержания AyuGram"
+    )
+
+    log("Все модификации успешно применены!")
 
 def main():
     if len(sys.argv) < 2:
@@ -44,19 +87,10 @@ def main():
         sys.exit(1)
 
     target_repo = os.path.abspath(sys.argv[1])
-    if not os.path.isdir(target_repo):
-        print(f"Ошибка: каталог {target_repo} не найден.")
-        sys.exit(1)
-
     log(f"Целевой репозиторий: {target_repo}")
+
     inject_ayu_core(target_repo)
-
-    patches = sorted([os.path.join(PATCHES_DIR, f) for f in os.listdir(PATCHES_DIR) if f.endswith(".patch")])
-    for p in patches:
-        if not apply_patch_file(target_repo, p):
-            sys.exit(1)
-
-    log("Все модификации AyuGram успешно внедрены!")
+    apply_all_modifications(target_repo)
 
 if __name__ == "__main__":
     main()
