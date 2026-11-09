@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Автоматизированный скрипт внедрения AyuGram в Telegram-iOS без хрупких git diff,
-с фиксацией совместимой версии Bazel 7.1.1 и синхронизацией версий Xcode
+с генерацией валидного configuration.json (без плейсхолдеров {! ... !}),
+фиксацией совместимой версии Bazel 7.1.1 и синхронизацией версий Xcode
 """
 
 import os
@@ -53,6 +54,27 @@ def patch_file(filepath, search_str, replace_str, description):
     log(f"Успешно модифицирован {os.path.basename(filepath)} ({description})")
     return True
 
+def generate_ayugram_config(target_repo):
+    log("Генерация валидной конфигурации сборки AyuGram...")
+    config_path = os.path.join(target_repo, "build-system", "ayugram_config.json")
+    config_data = {
+        "bundle_id": "org.telegram.ayugram",
+        "api_id": "2040",
+        "api_hash": "b18441a1ff607e10a989891a5462e627",
+        "team_id": "AYUGRAM123",
+        "app_center_id": "0",
+        "is_internal_build": "true",
+        "is_appstore_build": "false",
+        "appstore_id": "0",
+        "app_specific_url_scheme": "tg",
+        "premium_iap_product_id": "",
+        "enable_siri": False,
+        "enable_icloud": False
+    }
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(config_data, f, indent=4)
+    log(f"Создан конфигурационный файл: {config_path}")
+
 def sync_versions_json(target_repo):
     log("Синхронизация versions.json и фиксация Bazel 7.1.1...")
     versions_path = os.path.join(target_repo, "versions.json")
@@ -62,7 +84,7 @@ def sync_versions_json(target_repo):
     with open(versions_path, "r", encoding="utf-8") as f:
         vdata = json.load(f)
 
-    # Определяем реальную версию Xcode на раннере
+    # Реальная версия Xcode
     try:
         xcode_path = subprocess.check_output(["xcode-select", "-p"], text=True).strip()
         plist_path = os.path.normpath(os.path.join(xcode_path, "..", "Info.plist"))
@@ -76,10 +98,9 @@ def sync_versions_json(target_repo):
         log(f"Не удалось извлечь точную версию Xcode ({e}), fallback: 26.6")
         vdata["xcode"] = "26.6"
 
-    # Telegram 10.14 строго совместим с Bazel 7.1.1 (в Bazel 8/9 удален флаг --swiftcopt)
+    # Telegram 10.14 строго совместим с Bazel 7.1.1
     vdata["bazel"] = "7.1.1"
     
-    # Фиксируем версию для Bazelisk
     with open(os.path.join(target_repo, ".bazelversion"), "w", encoding="utf-8") as f:
         f.write("7.1.1\n")
     log("Установлен .bazelversion = 7.1.1")
@@ -104,7 +125,6 @@ import subprocess
 current_dir = os.path.dirname(os.path.abspath(__file__))
 real_make = os.path.join(current_dir, "Make.py.real")
 
-# Принудительно устанавливаем Bazel 7.1.1
 os.environ["USE_BAZEL_VERSION"] = "7.1.1"
 
 args = sys.argv[1:]
@@ -115,11 +135,11 @@ if "generateProject" in args:
         "--overrideXcodeVersion",
         "--overrideBazelVersion",
         "generateProject",
-        "--configurationPath=build-system/template_minimal_development_configuration.json",
+        "--configurationPath=build-system/ayugram_config.json",
         "--disableProvisioningProfiles",
         "--xcodeManagedCodesigning"
     ]
-    print("[Make-Wrapper] Автоматический запуск generateProject с Bazel 7.1.1...")
+    print("[Make-Wrapper] Автоматический запуск generateProject с ayugram_config.json...")
     sys.exit(subprocess.call(cmd, env=os.environ))
 else:
     sys.exit(subprocess.call([sys.executable, real_make] + args, env=os.environ))
@@ -157,10 +177,13 @@ def apply_all_modifications(target_repo):
         "Инициализация фонового удержания AyuGram"
     )
 
-    # 3. Синхронизация версий и фиксация Bazel 7.1.1
+    # 3. Создание валидной конфигурации сборки
+    generate_ayugram_config(target_repo)
+
+    # 4. Синхронизация версий и фиксация Bazel 7.1.1
     sync_versions_json(target_repo)
 
-    # 4. Настройка обертки сборочного скрипта
+    # 5. Настройка обертки сборочного скрипта
     setup_make_wrapper(target_repo)
 
     log("Все модификации успешно применены!")
