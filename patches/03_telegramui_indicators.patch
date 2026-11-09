@@ -1,0 +1,34 @@
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageItemView.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageItemView.swift
+@@ -320,6 +320,18 @@ extension ChatMessageItemView {
+     func updateMessageStatusLayout(message: Message) {
++        let isAyuDeleted = message.attributes.contains(where: { $0 is AyuDeletedMessageAttribute })
++        if isAyuDeleted && AyuSettings.shared.shouldMarkDeletedMessages {
++            self.dateAndStatusNode.setCustomPrefix(text: "🗑 [Удалено] ", color: UIColor.systemRed)
++        }
+     }
+ }
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageContextMenu.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageContextMenu.swift
+@@ -140,6 +140,25 @@ extension ChatMessageContextMenu {
+     static func customMenuItems(message: Message, context: AccountContext) -> [ContextMenuAction] {
++        var items: [ContextMenuAction] = []
++        let edits = AyuEditHistoryStorage.shared.editsFor(peerId: message.id.peerId.toInt64(), messageId: message.id.id)
++        if !edits.isEmpty {
++            items.append(ContextMenuAction(
++                title: "История правок (\(edits.count))",
++                icon: UIImage(systemName: "clock.arrow.circlepath"),
++                action: {
++                    let alert = UIAlertController(title: "История изменений", message: nil, preferredStyle: .actionSheet)
++                    for (idx, entry) in edits.enumerated() {
++                        let dateStr = DateFormatter.localizedString(from: Date(timeIntervalSince1970: TimeInterval(entry.timestamp)), dateStyle: .short, timeStyle: .medium)
++                        alert.addAction(UIAlertAction(title: "#\(idx + 1) [\(dateStr)]: \(entry.text.prefix(40))...", style: .default, handler: nil))
++                    }
++                    alert.addAction(UIAlertAction(title: "Закрыть", style: .cancel, handler: nil))
++                    context.sharedContext.mainWindow?.present(alert, animated: true)
++                }
++            ))
++        }
++        return items
+     }
+ }

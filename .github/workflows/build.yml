@@ -1,0 +1,75 @@
+name: Build AyuGram-iOS (IPA for TrollStore / iOS 15)
+
+on:
+  workflow_dispatch:
+    inputs:
+      telegram_tag:
+        description: 'Тег Telegram-iOS для сборки'
+        required: true
+        default: 'release-10.14'
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 180
+
+    steps:
+      - name: Checkout AyuGram-iOS Repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Bazelisk and Tools
+        run: |
+          brew install bazelisk ninja yasm
+          pip3 install pyyaml
+
+      - name: Clone Telegram-iOS Repository
+        run: |
+          git clone --depth 1 --branch ${{ github.event.inputs.telegram_tag }} https://github.com/TelegramMessenger/Telegram-iOS.git /tmp/Telegram-iOS
+          cd /tmp/Telegram-iOS
+          git submodule update --init --recursive --depth 1
+
+      - name: Apply AyuGram Patches
+        run: |
+          python3 scripts/apply_patches.py /tmp/Telegram-iOS
+
+      - name: Prepare Fake / Ad-Hoc Provisioning Profile for TrollStore
+        run: |
+          cd /tmp/Telegram-iOS
+          python3 build-system/Make/Make.py \
+            --overridePackageName=org.telegram.ayugram \
+            --apiId="${{ secrets.TELEGRAM_API_ID || '2040' }}" \
+            --apiHash="${{ secrets.TELEGRAM_API_HASH || 'b18441a1ff607e10a989891a5462e627' }}" \
+            generateProject
+
+      - name: Compile Telegram with Bazel
+        run: |
+          cd /tmp/Telegram-iOS
+          bazelisk build //Telegram:Telegram \
+            --compilation_mode=opt \
+            --apple_generate_dsym=false \
+            --copt=-O3
+
+      - name: Package into IPA (Ad-Hoc for TrollStore / iOS 15)
+        run: |
+          cd /tmp/Telegram-iOS
+          mkdir -p build_output/Payload
+          cp -r bazel-bin/Telegram/Telegram.app build_output/Payload/
+          
+          # Ad-Hoc codesign для работы под TrollStore без Apple Developer ID
+          codesign --force --deep -s - build_output/Payload/Telegram.app
+          
+          cd build_output
+          zip -qr AyuGram-iOS.ipa Payload
+          mv AyuGram-iOS.ipa ${{ github.workspace }}/AyuGram-iOS.ipa
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AyuGram-iOS-TrollStore
+          path: AyuGram-iOS.ipa
+          retention-days: 14

@@ -1,0 +1,22 @@
+--- a/submodules/Postbox/Sources/MessageHistoryOperations.swift
++++ b/submodules/Postbox/Sources/MessageHistoryOperations.swift
+@@ -215,6 +215,18 @@ extension MessageHistoryOperations {
+     public static func deleteMessages(transaction: PostboxTransaction, messageIds: [MessageId]) {
++        if AyuSettings.shared.isAntiDeleteEnabled {
++            let currentTimestamp = Int32(Date().timeIntervalSince1970)
++            for id in messageIds {
++                if let currentMessage = transaction.getMessage(id) {
++                    var attributes = currentMessage.attributes
++                    attributes.removeAll(where: { $0 is AyuDeletedMessageAttribute })
++                    attributes.append(AyuDeletedMessageAttribute(deletedAt: currentTimestamp, originalTimestamp: currentMessage.timestamp))
++                    transaction.updateMessage(id, update: { current in
++                        return .update(current.withUpdatedAttributes(attributes))
++                    })
++                }
++            }
++            return
++        }
+         for id in messageIds {
+             transaction.removeMessage(id)
+         }
+     }

@@ -1,0 +1,41 @@
+--- a/submodules/TelegramCore/Sources/State/ManagedAccountSynchronization.swift
++++ b/submodules/TelegramCore/Sources/State/ManagedAccountSynchronization.swift
+@@ -410,6 +410,18 @@ extension ManagedAccountSynchronization {
+     private static func processEditMessageUpdate(transaction: PostboxTransaction, rawMessage: Api.Message) {
++        if AyuSettings.shared.isEditHistoryEnabled {
++            let messageId = rawMessage.id
++            let peerId = rawMessage.peerId
++            if let existingMessage = transaction.getMessage(MessageId(peerId: peerId, namespace: 0, id: messageId)) {
++                AyuEditHistoryStorage.shared.recordEdit(
++                    peerId: peerId.toInt64(),
++                    messageId: messageId,
++                    previousText: existingMessage.text,
++                    editTimestamp: Int32(Date().timeIntervalSince1970)
++                )
++            }
++        }
+         transaction.applyMessageEdit(rawMessage)
+     }
+ }
+--- a/submodules/TelegramCore/Sources/TelegramEngine/Messages/ReadHistory.swift
++++ b/submodules/TelegramCore/Sources/TelegramEngine/Messages/ReadHistory.swift
+@@ -55,6 +55,10 @@ extension TelegramEngine.Messages {
+     public func applyMaxReadIndex(peerId: PeerId, maxReadIndex: MessageIndex) -> Signal<Never, NoError> {
++        if AyuSettings.shared.isNoReadHistoryEnabled {
++            return .complete()
++        }
+         return self.account.postbox.transaction { transaction -> Void in
+             transaction.applyMaxReadIndex(peerId: peerId, maxReadIndex: maxReadIndex)
+         }
+     }
+ }
+--- a/submodules/TelegramCore/Sources/TelegramEngine/Peers/PeerActivityManager.swift
++++ b/submodules/TelegramCore/Sources/TelegramEngine/Peers/PeerActivityManager.swift
+@@ -88,6 +88,9 @@ final class PeerActivityManager {
+     func setActivity(peerId: PeerId, activity: PeerActivity) {
++        if AyuSettings.shared.isNoTypingEnabled {
++            return
++        }
+         self.network.request(Api.functions.messages.setTyping(peer: peerId.apiInputPeer, action: activity.apiAction))
+     }
+ }
