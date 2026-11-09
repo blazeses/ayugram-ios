@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Автоматизированный скрипт внедрения AyuGram в Telegram-iOS без хрупких git diff,
-с генерацией валидного configuration.json, настройкой флагов сборки под TrollStore,
+с генерацией валидного build_configuration repository, настройкой флагов сборки под TrollStore,
 фиксацией совместимой версии Bazel 7.4.1 (с исправлением dyld LC_UUID на macOS 15)
-и интеллектуальным Make-Wrapper для компиляции без сторонних Xcode-генераторов.
+и интеллектуальным Make-Wrapper для сборки без сторонних Xcode-генераторов.
 """
 
 import os
@@ -51,6 +51,59 @@ def patch_file(filepath, search_str, replace_str, description):
         f.write(new_content)
     log(f"Успешно модифицирован {os.path.basename(filepath)} ({description})")
     return True
+
+def setup_configuration_repository(target_repo):
+    log("Создание и настройка configuration-repository для Bazel...")
+    config_repo = os.path.join(target_repo, "build-input", "configuration-repository")
+    os.makedirs(config_repo, exist_ok=True)
+    
+    # 1. WORKSPACE
+    with open(os.path.join(config_repo, "WORKSPACE"), "w", encoding="utf-8") as f:
+        f.write("# build_configuration repository\n")
+        
+    # 2. BUILD
+    with open(os.path.join(config_repo, "BUILD"), "w", encoding="utf-8") as f:
+        f.write('exports_files(["variables.bzl"])\n')
+        
+    # 3. variables.bzl
+    variables_bzl = """telegram_bazel_path = ""
+telegram_use_xcode_managed_codesigning = True
+telegram_bundle_id = "org.telegram.ayugram"
+telegram_api_id = "2040"
+telegram_api_hash = "b18441a1ff607e10a989891a5462e627"
+telegram_team_id = "AYUGRAM123"
+telegram_app_center_id = "0"
+telegram_is_internal_build = "true"
+telegram_is_appstore_build = "false"
+telegram_appstore_id = "0"
+telegram_app_specific_url_scheme = "tg"
+telegram_premium_iap_product_id = ""
+telegram_aps_environment = ""
+telegram_enable_siri = False
+telegram_enable_icloud = False
+telegram_enable_watch = False
+"""
+    with open(os.path.join(config_repo, "variables.bzl"), "w", encoding="utf-8") as f:
+        f.write(variables_bzl)
+
+    # 4. provisioning directory
+    prov_dir = os.path.join(config_repo, "provisioning")
+    os.makedirs(prov_dir, exist_ok=True)
+    with open(os.path.join(prov_dir, "BUILD"), "w", encoding="utf-8") as f:
+        f.write("exports_files([])\n")
+
+    # 5. Добавляем local_repository в корневой WORKSPACE
+    root_workspace = os.path.join(target_repo, "WORKSPACE")
+    if os.path.isfile(root_workspace):
+        with open(root_workspace, "r", encoding="utf-8", errors="ignore") as f:
+            ws_content = f.read()
+        if 'name = "build_configuration"' not in ws_content:
+            repo_decl = '\nlocal_repository(\n    name = "build_configuration",\n    path = "build-input/configuration-repository",\n)\n'
+            with open(root_workspace, "a", encoding="utf-8") as f:
+                f.write(repo_decl)
+            log("Добавлен local_repository build_configuration в корневой WORKSPACE.")
+
+    log("Файлы configuration-repository успешно сгенерированы.")
 
 def generate_ayugram_config(target_repo):
     log("Генерация валидной конфигурации сборки AyuGram...")
@@ -113,6 +166,7 @@ def configure_bazelrc(target_repo):
     options = [
         "",
         "# AyuGram TrollStore Build Options",
+        "build --override_repository=build_configuration=build-input/configuration-repository",
         "build --//Telegram:disableProvisioningProfiles",
         "build --//Telegram:disableExtensions",
         "build --//Telegram:disableStripping",
@@ -135,108 +189,24 @@ def setup_make_wrapper(target_repo):
     wrapper_code = '''#!/usr/bin/env python3
 import os
 import sys
-import shutil
-import glob
-import subprocess
-
-current_dir = os.path.dirname(os.path.abspath(__file__))
-real_make = os.path.join(current_dir, "Make.py.real")
-
-os.environ["USE_BAZEL_VERSION"] = "7.4.1"
 
 args = sys.argv[1:]
 print(f"[Make-Wrapper] Получен вызов: {args}")
 
+# generateProject в CI не нужен, так как прямая компиляция идет через Bazel
 if "generateProject" in args:
-    print("[Make-Wrapper] generateProject пропущен (генерация Xcode-проекта не требуется для сборки IPA через Bazel в CI).")
+    print("[Make-Wrapper] generateProject перехвачен: configuration-repository уже настроен, Xcode-проект пропущен.")
     sys.exit(0)
 
-if "build" in args:
-    print("[Make-Wrapper] Подготовка параметров для компиляции AyuGram...")
-    output_dir = None
-    cleaned_args = []
-    skip_next = False
-
-    for i, a in enumerate(args):
-        if skip_next:
-            skip_next = False
-            continue
-        if a.startswith("--outputDirectory="):
-            output_dir = a.split("=", 1)[1]
-        elif a == "--outputDirectory":
-            if i + 1 < len(args):
-                output_dir = args[i + 1]
-                skip_next = True
-        elif a.startswith("--configurationPath="):
-            cleaned_args.append("--configurationPath=build-system/ayugram_config.json")
-        elif a == "--configurationPath":
-            cleaned_args.append("--configurationPath=build-system/ayugram_config.json")
-            skip_next = True
-        else:
-            cleaned_args.append(a)
-
-    if not any("--xcodeManagedCodesigning" in a for a in cleaned_args):
-        cleaned_args.append("--xcodeManagedCodesigning")
-
-    final_cmd = [
-        sys.executable,
-        real_make,
-        "--overrideXcodeVersion",
-        "--overrideBazelVersion"
-    ] + cleaned_args
-
-    print(f"[Make-Wrapper] Запуск оригинального Make.py: {' '.join(final_cmd)}")
-    ret = subprocess.call(final_cmd, env=os.environ)
-    if ret != 0:
-        print(f"[Make-Wrapper] Ошибка компиляции Make.py (код {ret})")
-        sys.exit(ret)
-
-    print("[Make-Wrapper] Сборка Bazel завершена. Маршрутизация выходных артефактов...")
-    workspace = os.environ.get("GITHUB_WORKSPACE", os.getcwd())
-    if not output_dir:
-        output_dir = os.path.join(workspace, "output")
-    os.makedirs(output_dir, exist_ok=True)
-
-    # 1. Поиск скомпилированного .app
-    app_found = None
-    for root, dirs, files in os.walk("."):
-        for d in dirs:
-            if d.endswith(".app"):
-                candidate = os.path.join(root, d)
-                if "bazel-bin" in candidate or "bazel-out" in candidate:
-                    app_found = candidate
-                    break
-        if app_found:
-            break
-
-    if app_found:
-        dest_app = os.path.join(output_dir, os.path.basename(app_found))
-        print(f"[Make-Wrapper] Найдено приложение: {app_found} -> {dest_app}")
-        if os.path.exists(dest_app):
-            shutil.rmtree(dest_app)
-        shutil.copytree(app_found, dest_app)
-
-    # 2. Поиск сгенерированного .ipa
-    ipa_candidates = glob.glob("bazel-bin/**/*.ipa", recursive=True) + glob.glob("bazel-out/**/*.ipa", recursive=True)
-    if ipa_candidates:
-        src_ipa = ipa_candidates[0]
-        dest_ipa_out = os.path.join(output_dir, "AyuGram-iOS.ipa")
-        dest_ipa_root = os.path.join(workspace, "AyuGram-iOS.ipa")
-        print(f"[Make-Wrapper] Найден IPA файл: {src_ipa} -> сохранение в {dest_ipa_out} и {dest_ipa_root}")
-        shutil.copy2(src_ipa, dest_ipa_out)
-        shutil.copy2(src_ipa, dest_ipa_root)
-
-    print("[Make-Wrapper] Готово! Артефакты подготовлены для TrollStore packaging.")
-    sys.exit(0)
-
-# Для всех остальных команд
-final_cmd = [sys.executable, real_make, "--overrideXcodeVersion", "--overrideBazelVersion"] + args
-sys.exit(subprocess.call(final_cmd, env=os.environ))
+current_dir = os.path.dirname(os.path.abspath(__file__))
+real_make = os.path.join(current_dir, "Make.py.real")
+import subprocess
+sys.exit(subprocess.call([sys.executable, real_make] + args, env=os.environ))
 '''
     with open(make_py, "w", encoding="utf-8") as f:
         f.write(wrapper_code)
     os.chmod(make_py, 0o755)
-    log("Установлен интеллектуальный Make-Wrapper.")
+    log("Установлен Make-Wrapper.")
 
 def apply_all_modifications(target_repo):
     # 1. Фоновые режимы (Keep-Alive аудио / voip) в Info.plist
@@ -275,16 +245,19 @@ def apply_all_modifications(target_repo):
         "Режим призрака: блокировка отправки отчетов о прочтении"
     )
 
-    # 4. Валидный конфигурационный файл сборки без плейсхолдеров
+    # 4. Создание и настройка configuration-repository для Bazel
+    setup_configuration_repository(target_repo)
+
+    # 5. Валидный конфигурационный файл сборки без плейсхолдеров
     generate_ayugram_config(target_repo)
 
-    # 5. Синхронизация версий и фиксация Bazel 7.4.1
+    # 6. Синхронизация версий и фиксация Bazel 7.4.1
     sync_versions_json(target_repo)
 
-    # 6. Настройка .bazelrc под TrollStore (без профилей, без расширений)
+    # 7. Настройка .bazelrc под TrollStore (без профилей, без расширений)
     configure_bazelrc(target_repo)
 
-    # 7. Установка перехватчика сборочной системы Make.py
+    # 8. Установка перехватчика сборочной системы Make.py
     setup_make_wrapper(target_repo)
 
     log("Все модификации AyuGram успешно применены!")
