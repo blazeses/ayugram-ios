@@ -74,9 +74,10 @@ if "generateProject" in args:
         real_make,
         "generateProject",
         "--configurationPath=build-system/template_minimal_development_configuration.json",
-        "--disableProvisioningProfiles"
+        "--disableProvisioningProfiles",
+        "--xcodeManagedCodesigning"
     ]
-    print("[Make-Wrapper] Автоматический запуск generateProject с корректной конфигурацией...")
+    print("[Make-Wrapper] Автоматический запуск generateProject с корректной конфигурацией и xcodeManagedCodesigning...")
     sys.exit(subprocess.call(cmd))
 else:
     sys.exit(subprocess.call([sys.executable, real_make] + args))
