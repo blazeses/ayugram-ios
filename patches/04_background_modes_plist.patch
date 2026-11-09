@@ -1,0 +1,11 @@
+--- a/Telegram/Telegram-iOS/Info.plist
++++ b/Telegram/Telegram-iOS/Info.plist
+@@ -45,6 +45,8 @@
+ 	<key>UIBackgroundModes</key>
+ 	<array>
+ 		<string>audio</string>
++		<string>voip</string>
++		<string>fetch</string>
+ 		<string>location</string>
+ 		<string>remote-notification</string>
+ 	</array>
