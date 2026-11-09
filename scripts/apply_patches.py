@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Автоматизированный скрипт внедрения AyuGram в Telegram-iOS без хрупких git diff
-и с авто-настройкой параметров сборки для Make.py
+Автоматизированный скрипт внедрения AyuGram в Telegram-iOS без хрупких git diff,
+с отключением строгих проверок версий Xcode/Bazel и авто-настройкой параметров Make.py
 """
 
 import os
@@ -51,6 +51,22 @@ def patch_file(filepath, search_str, replace_str, description):
     log(f"Успешно модифицирован {os.path.basename(filepath)} ({description})")
     return True
 
+def bypass_xcode_checks(target_repo):
+    log("Отключение строгих проверок версий Xcode и Bazel...")
+    build_env = os.path.join(target_repo, "build-system", "Make", "BuildEnvironment.py")
+    if os.path.isfile(build_env):
+        with open(build_env, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        
+        # Разрешаем любую установленную версию Xcode
+        content = content.replace(
+            "exit(1)",
+            "versions.xcode_version = actual_xcode_version\n                versions.bazel_version = actual_bazel_version"
+        )
+        with open(build_env, "w", encoding="utf-8") as f:
+            f.write(content)
+        log("Проверка версий в BuildEnvironment.py адаптирована под актуальный Xcode")
+
 def setup_make_wrapper(target_repo):
     make_py = os.path.join(target_repo, "build-system", "Make", "Make.py")
     make_real = os.path.join(target_repo, "build-system", "Make", "Make.py.real")
@@ -72,12 +88,14 @@ if "generateProject" in args:
     cmd = [
         sys.executable,
         real_make,
+        "--overrideXcodeVersion",
+        "--overrideBazelVersion",
         "generateProject",
         "--configurationPath=build-system/template_minimal_development_configuration.json",
         "--disableProvisioningProfiles",
         "--xcodeManagedCodesigning"
     ]
-    print("[Make-Wrapper] Автоматический запуск generateProject с корректной конфигурацией и xcodeManagedCodesigning...")
+    print("[Make-Wrapper] Автоматический запуск generateProject с оверрайдом версий...")
     sys.exit(subprocess.call(cmd))
 else:
     sys.exit(subprocess.call([sys.executable, real_make] + args))
@@ -115,7 +133,10 @@ def apply_all_modifications(target_repo):
         "Инициализация фонового удержания AyuGram"
     )
 
-    # 3. Настройка обертки сборочного скрипта
+    # 3. Отключение жестких ограничений версий Xcode
+    bypass_xcode_checks(target_repo)
+
+    # 4. Настройка обертки сборочного скрипта
     setup_make_wrapper(target_repo)
 
     log("Все модификации успешно применены!")
