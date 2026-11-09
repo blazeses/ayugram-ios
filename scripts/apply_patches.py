@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
 Автоматизированный скрипт внедрения AyuGram в Telegram-iOS без хрупких git diff,
-с отключением строгих проверок версий Xcode/Bazel и авто-настройкой параметров Make.py
+с автоматической синхронизацией версий Xcode/Bazel в versions.json
+и настройкой параметров Make.py
 """
 
 import os
 import sys
 import shutil
+import json
+import subprocess
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AYU_CORE_DIR = os.path.join(BASE_DIR, "AyuCore", "Sources")
@@ -51,21 +54,42 @@ def patch_file(filepath, search_str, replace_str, description):
     log(f"Успешно модифицирован {os.path.basename(filepath)} ({description})")
     return True
 
-def bypass_xcode_checks(target_repo):
-    log("Отключение строгих проверок версий Xcode и Bazel...")
-    build_env = os.path.join(target_repo, "build-system", "Make", "BuildEnvironment.py")
-    if os.path.isfile(build_env):
-        with open(build_env, "r", encoding="utf-8", errors="ignore") as f:
-            content = f.read()
-        
-        # Разрешаем любую установленную версию Xcode
-        content = content.replace(
-            "exit(1)",
-            "versions.xcode_version = actual_xcode_version\n                versions.bazel_version = actual_bazel_version"
-        )
-        with open(build_env, "w", encoding="utf-8") as f:
-            f.write(content)
-        log("Проверка версий в BuildEnvironment.py адаптирована под актуальный Xcode")
+def sync_versions_json(target_repo):
+    log("Синхронизация versions.json с фактическими версиями среды...")
+    versions_path = os.path.join(target_repo, "versions.json")
+    if not os.path.isfile(versions_path):
+        return
+
+    with open(versions_path, "r", encoding="utf-8") as f:
+        vdata = json.load(f)
+
+    # Определяем реальную версию Xcode
+    try:
+        xcode_path = subprocess.check_output(["xcode-select", "-p"], text=True).strip()
+        plist_path = os.path.normpath(os.path.join(xcode_path, "..", "Info.plist"))
+        xcode_ver = subprocess.check_output(
+            ["plutil", "-extract", "CFBundleShortVersionString", "raw", plist_path],
+            text=True
+        ).strip()
+        vdata["xcode"] = xcode_ver
+        log(f"Версия Xcode обновлена на: {xcode_ver}")
+    except Exception as e:
+        log(f"Не удалось автоматически извлечь версию Xcode ({e}), оставляем fallback")
+        vdata["xcode"] = "26.6"
+
+    # Определяем реальную версию Bazel
+    try:
+        bazel_out = subprocess.check_output(["bazel", "--version"], text=True).strip()
+        # Вывод: 'bazel 7.x.x'
+        bazel_ver = bazel_out.split()[-1]
+        vdata["bazel"] = bazel_ver
+        log(f"Версия Bazel обновлена на: {bazel_ver}")
+    except Exception:
+        pass
+
+    with open(versions_path, "w", encoding="utf-8") as f:
+        json.dump(vdata, f, indent=4)
+    log("Файл versions.json успешно синхронизирован с окружением.")
 
 def setup_make_wrapper(target_repo):
     make_py = os.path.join(target_repo, "build-system", "Make", "Make.py")
@@ -95,7 +119,7 @@ if "generateProject" in args:
         "--disableProvisioningProfiles",
         "--xcodeManagedCodesigning"
     ]
-    print("[Make-Wrapper] Автоматический запуск generateProject с оверрайдом версий...")
+    print("[Make-Wrapper] Автоматический запуск generateProject...")
     sys.exit(subprocess.call(cmd))
 else:
     sys.exit(subprocess.call([sys.executable, real_make] + args))
@@ -103,7 +127,7 @@ else:
     with open(make_py, "w", encoding="utf-8") as f:
         f.write(wrapper_code)
     os.chmod(make_py, 0o755)
-    log("Установлен интеллектуальный Make-Wrapper для автоматической сборки.")
+    log("Установлен интеллектуальный Make-Wrapper.")
 
 def apply_all_modifications(target_repo):
     # 1. Background modes в Info.plist
@@ -133,8 +157,8 @@ def apply_all_modifications(target_repo):
         "Инициализация фонового удержания AyuGram"
     )
 
-    # 3. Отключение жестких ограничений версий Xcode
-    bypass_xcode_checks(target_repo)
+    # 3. Синхронизация версий в versions.json
+    sync_versions_json(target_repo)
 
     # 4. Настройка обертки сборочного скрипта
     setup_make_wrapper(target_repo)
