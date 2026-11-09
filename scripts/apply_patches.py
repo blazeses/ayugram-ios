@@ -167,6 +167,8 @@ def configure_bazelrc(target_repo):
         "",
         "# AyuGram TrollStore Build Options",
         "build --override_repository=build_configuration=build-input/configuration-repository",
+        "build --define=buildNumber=1000",
+        "build --define=telegramVersion=10.14",
         "build --//Telegram:disableProvisioningProfiles",
         "build --//Telegram:disableExtensions",
         "build --//Telegram:disableStripping",
@@ -254,7 +256,7 @@ def apply_all_modifications(target_repo):
     # 6. Синхронизация версий и фиксация Bazel 7.4.1
     sync_versions_json(target_repo)
 
-    # 7. Настройка .bazelrc под TrollStore (без профилей, без расширений)
+    # 7. Настройка .bazelrc под TrollStore (без профилей, без расширений, с buildNumber и telegramVersion)
     configure_bazelrc(target_repo)
 
     # 8. Установка перехватчика сборочной системы Make.py
