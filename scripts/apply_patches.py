@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Автоматизированный скрипт внедрения AyuGram в Telegram-iOS без хрупких git diff,
-с генерацией валидного build_configuration repository, настройкой флагов сборки под TrollStore,
-фиксацией совместимой версии Bazel 7.4.1 (с исправлением dyld LC_UUID на macOS 15)
-и интеллектуальным Make-Wrapper для сборки без сторонних Xcode-генераторов.
+с генерацией валидного build_configuration repository, исправлением -Wl,-no_uuid в apple_support
+(устранение dyld missing LC_UUID на macOS 15), настройкой флагов сборки под TrollStore,
+фиксацией совместимой версии Bazel 7.4.1 и интеллектуальным Make-Wrapper.
 """
 
 import os
@@ -51,6 +51,29 @@ def patch_file(filepath, search_str, replace_str, description):
         f.write(new_content)
     log(f"Успешно модифицирован {os.path.basename(filepath)} ({description})")
     return True
+
+def fix_apple_support_uuid(target_repo):
+    log("Устранение флагов -Wl,-no_uuid в apple_support (фикс dyld missing LC_UUID на macOS 15)...")
+    # Ищем все файлы universal_exec_tool.bzl в репозитории
+    count = 0
+    for root, dirs, files in os.walk(target_repo):
+        for file in files:
+            if file.endswith(".bzl"):
+                bzl_path = os.path.join(root, file)
+                try:
+                    with open(bzl_path, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                    if "-Wl,-no_uuid" in content or "-no_uuid" in content:
+                        new_content = content.replace("-Wl,-no_uuid \\\n", "").replace("-Wl,-no_uuid\n", "")
+                        new_content = new_content.replace("-Wl,-no_adhoc_codesign \\\n", "").replace("-Wl,-no_adhoc_codesign\n", "")
+                        new_content = new_content.replace("-Wl,-no_uuid", "").replace("-Wl,-no_adhoc_codesign", "")
+                        with open(bzl_path, "w", encoding="utf-8") as f:
+                            f.write(new_content)
+                        log(f"Удален флаг -no_uuid из {os.path.relpath(bzl_path, target_repo)}")
+                        count += 1
+                except Exception as e:
+                    pass
+    log(f"Патч LC_UUID применен к {count} файлам правил тулчейна.")
 
 def setup_configuration_repository(target_repo):
     log("Создание и настройка configuration-repository для Bazel...")
@@ -149,7 +172,7 @@ def sync_versions_json(target_repo):
         log(f"Не удалось извлечь точную версию Xcode ({e}), fallback: 26.6")
         vdata["xcode"] = "26.6"
 
-    # Bazel 7.4.1 исправляет dyld missing LC_UUID load command на macOS 15+
+    # Bazel 7.4.1
     vdata["bazel"] = "7.4.1"
     
     with open(os.path.join(target_repo, ".bazelversion"), "w", encoding="utf-8") as f:
@@ -247,19 +270,22 @@ def apply_all_modifications(target_repo):
         "Режим призрака: блокировка отправки отчетов о прочтении"
     )
 
-    # 4. Создание и настройка configuration-repository для Bazel
+    # 4. Удаление флагов -no_uuid в apple_support (фикс dyld missing LC_UUID)
+    fix_apple_support_uuid(target_repo)
+
+    # 5. Создание и настройка configuration-repository для Bazel
     setup_configuration_repository(target_repo)
 
-    # 5. Валидный конфигурационный файл сборки без плейсхолдеров
+    # 6. Валидный конфигурационный файл сборки без плейсхолдеров
     generate_ayugram_config(target_repo)
 
-    # 6. Синхронизация версий и фиксация Bazel 7.4.1
+    # 7. Синхронизация версий и фиксация Bazel 7.4.1
     sync_versions_json(target_repo)
 
-    # 7. Настройка .bazelrc под TrollStore (без профилей, без расширений, с buildNumber и telegramVersion)
+    # 8. Настройка .bazelrc под TrollStore
     configure_bazelrc(target_repo)
 
-    # 8. Установка перехватчика сборочной системы Make.py
+    # 9. Установка перехватчика сборочной системы Make.py
     setup_make_wrapper(target_repo)
 
     log("Все модификации AyuGram успешно применены!")
