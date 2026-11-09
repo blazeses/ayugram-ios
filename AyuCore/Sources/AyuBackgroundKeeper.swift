@@ -1,6 +1,7 @@
 import Foundation
-import AVFoundation
+#if canImport(UIKit)
 import UIKit
+import AVFoundation
 import UserNotifications
 
 /// Сервис фонового удержания соединения (Keep-Alive) для TrollStore на iOS 15+.
@@ -117,3 +118,12 @@ public final class AyuBackgroundKeeper {
         return data
     }
 }
+#else
+public final class AyuBackgroundKeeper {
+    public static let shared = AyuBackgroundKeeper()
+    private init() {}
+    public func start() {}
+    public func requestNotificationPermissions() {}
+    public func triggerLocalNotification(senderName: String, messageText: String, chatPeerId: Int64) {}
+}
+#endif
