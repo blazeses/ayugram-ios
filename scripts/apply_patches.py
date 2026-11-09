@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Автоматизированный скрипт внедрения AyuGram в Telegram-iOS без хрупких git diff,
-с автоматической синхронизацией версий Xcode/Bazel в versions.json
-и настройкой параметров Make.py
+с фиксацией совместимой версии Bazel 7.1.1 и синхронизацией версий Xcode
 """
 
 import os
@@ -55,7 +54,7 @@ def patch_file(filepath, search_str, replace_str, description):
     return True
 
 def sync_versions_json(target_repo):
-    log("Синхронизация versions.json с фактическими версиями среды...")
+    log("Синхронизация versions.json и фиксация Bazel 7.1.1...")
     versions_path = os.path.join(target_repo, "versions.json")
     if not os.path.isfile(versions_path):
         return
@@ -63,7 +62,7 @@ def sync_versions_json(target_repo):
     with open(versions_path, "r", encoding="utf-8") as f:
         vdata = json.load(f)
 
-    # Определяем реальную версию Xcode
+    # Определяем реальную версию Xcode на раннере
     try:
         xcode_path = subprocess.check_output(["xcode-select", "-p"], text=True).strip()
         plist_path = os.path.normpath(os.path.join(xcode_path, "..", "Info.plist"))
@@ -74,22 +73,20 @@ def sync_versions_json(target_repo):
         vdata["xcode"] = xcode_ver
         log(f"Версия Xcode обновлена на: {xcode_ver}")
     except Exception as e:
-        log(f"Не удалось автоматически извлечь версию Xcode ({e}), оставляем fallback")
+        log(f"Не удалось извлечь точную версию Xcode ({e}), fallback: 26.6")
         vdata["xcode"] = "26.6"
 
-    # Определяем реальную версию Bazel
-    try:
-        bazel_out = subprocess.check_output(["bazel", "--version"], text=True).strip()
-        # Вывод: 'bazel 7.x.x'
-        bazel_ver = bazel_out.split()[-1]
-        vdata["bazel"] = bazel_ver
-        log(f"Версия Bazel обновлена на: {bazel_ver}")
-    except Exception:
-        pass
+    # Telegram 10.14 строго совместим с Bazel 7.1.1 (в Bazel 8/9 удален флаг --swiftcopt)
+    vdata["bazel"] = "7.1.1"
+    
+    # Фиксируем версию для Bazelisk
+    with open(os.path.join(target_repo, ".bazelversion"), "w", encoding="utf-8") as f:
+        f.write("7.1.1\n")
+    log("Установлен .bazelversion = 7.1.1")
 
     with open(versions_path, "w", encoding="utf-8") as f:
         json.dump(vdata, f, indent=4)
-    log("Файл versions.json успешно синхронизирован с окружением.")
+    log("Файл versions.json успешно синхронизирован с Bazel 7.1.1.")
 
 def setup_make_wrapper(target_repo):
     make_py = os.path.join(target_repo, "build-system", "Make", "Make.py")
@@ -107,6 +104,9 @@ import subprocess
 current_dir = os.path.dirname(os.path.abspath(__file__))
 real_make = os.path.join(current_dir, "Make.py.real")
 
+# Принудительно устанавливаем Bazel 7.1.1
+os.environ["USE_BAZEL_VERSION"] = "7.1.1"
+
 args = sys.argv[1:]
 if "generateProject" in args:
     cmd = [
@@ -119,10 +119,10 @@ if "generateProject" in args:
         "--disableProvisioningProfiles",
         "--xcodeManagedCodesigning"
     ]
-    print("[Make-Wrapper] Автоматический запуск generateProject...")
-    sys.exit(subprocess.call(cmd))
+    print("[Make-Wrapper] Автоматический запуск generateProject с Bazel 7.1.1...")
+    sys.exit(subprocess.call(cmd, env=os.environ))
 else:
-    sys.exit(subprocess.call([sys.executable, real_make] + args))
+    sys.exit(subprocess.call([sys.executable, real_make] + args, env=os.environ))
 '''
     with open(make_py, "w", encoding="utf-8") as f:
         f.write(wrapper_code)
@@ -157,7 +157,7 @@ def apply_all_modifications(target_repo):
         "Инициализация фонового удержания AyuGram"
     )
 
-    # 3. Синхронизация версий в versions.json
+    # 3. Синхронизация версий и фиксация Bazel 7.1.1
     sync_versions_json(target_repo)
 
     # 4. Настройка обертки сборочного скрипта
