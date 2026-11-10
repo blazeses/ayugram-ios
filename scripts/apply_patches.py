@@ -249,6 +249,47 @@ def patch_posix_headers(target_repo):
                     pass
     log(f"POSIX сокет заголовки проверены и обновлены (дополнительно обновлено: {count} файлов).")
 
+def patch_clang_warnings_and_werror(target_repo):
+    log("Устранение -Werror и исправление VLA/kMemoryChunkSize под Xcode 16 Clang...")
+    submodules_dir = os.path.join(target_repo, "submodules")
+    if not os.path.isdir(submodules_dir):
+        return
+
+    # 1. Точечное исправление kMemoryChunkSize в MTInternalMessageParser.m
+    parser_path = os.path.join(submodules_dir, "MtProtoKit", "Sources", "MTInternalMessageParser.m")
+    if os.path.isfile(parser_path):
+        with open(parser_path, "r", encoding="utf-8", errors="ignore") as f:
+            p_content = f.read()
+        # Заменяем static const на enum или #define, чтобы убрать ошибку VLA (variable length array folded)
+        p_new = re.sub(
+            r'static\s+const\s+(?:int|NSInteger|NSUInteger|size_t)\s+kMemoryChunkSize\s*=\s*([^;]+);',
+            r'enum { kMemoryChunkSize = \1 };',
+            p_content
+        )
+        if p_new != p_content:
+            with open(parser_path, "w", encoding="utf-8") as f:
+                f.write(p_new)
+            log("Исправлен kMemoryChunkSize (VLA -> enum compile-time constant) в MTInternalMessageParser.m")
+
+    # 2. Удаление -Werror во всех сборочных файлах submodules
+    count = 0
+    for root, dirs, files in os.walk(submodules_dir):
+        for file in files:
+            if file in ("BUILD", "BUILD.bazel") or file.endswith(".bzl"):
+                fpath = os.path.join(root, file)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                    if '"-Werror"' in content or "'-Werror'" in content or "-Werror" in content:
+                        new_content = content.replace('"-Werror"', '"-Wno-error"')
+                        new_content = new_content.replace("'-Werror'", "'-Wno-error'")
+                        with open(fpath, "w", encoding="utf-8") as f:
+                            f.write(new_content)
+                        count += 1
+                except Exception:
+                    pass
+    log(f"Удалены жесткие флаги -Werror из {count} сборочных файлов подмодулей.")
+
 def setup_configuration_repository(target_repo):
     log("Создание и настройка configuration-repository для Bazel...")
     config_repo = os.path.join(target_repo, "build-input", "configuration-repository")
@@ -369,6 +410,12 @@ def configure_bazelrc(target_repo):
         "build --//Telegram:disableProvisioningProfiles",
         "build --//Telegram:disableExtensions",
         "build --//Telegram:disableStripping",
+        "build --copt=-Wno-error",
+        "build --copt=-Wno-gnu-folding-constant",
+        "build --copt=-Wno-vla-extension",
+        "build --objc_opt=-Wno-error",
+        "build --objc_opt=-Wno-gnu-folding-constant",
+        "build --cxxopt=-Wno-error",
         "build --announce_rc",
         "build --verbose_failures",
         ""
@@ -453,6 +500,9 @@ def apply_all_modifications(target_repo):
 
     # 6. Патч POSIX сокет заголовков (sa_family_t) для Clang modules на Xcode 16
     patch_posix_headers(target_repo)
+
+    # 7. Устранение -Werror и фикс VLA / kMemoryChunkSize под Xcode 16 Clang
+    patch_clang_warnings_and_werror(target_repo)
 
     # 6. Создание и настройка configuration-repository для Bazel
     setup_configuration_repository(target_repo)
