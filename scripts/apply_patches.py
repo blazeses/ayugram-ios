@@ -290,6 +290,52 @@ def patch_clang_warnings_and_werror(target_repo):
                     pass
     log(f"Удалены жесткие флаги -Werror из {count} сборочных файлов подмодулей.")
 
+def patch_webrtc_lifetime_bound(target_repo):
+    log("Патч WebRTC и Abseil (фикс [[clang::lifetimebound]] на Xcode 16)...")
+    tp_dir = os.path.join(target_repo, "third-party")
+    if not os.path.isdir(tp_dir):
+        return
+
+    count = 0
+    for root, dirs, files in os.walk(tp_dir):
+        for file in files:
+            if file.endswith((".h", ".cc", ".cpp")):
+                fpath = os.path.join(root, file)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        content = f.read()
+                    changed = False
+
+                    # 1. Отключаем макрос ABSL_ATTRIBUTE_LIFETIME_BOUND в Abseil
+                    if "ABSL_ATTRIBUTE_LIFETIME_BOUND" in content:
+                        new_content = re.sub(
+                            r'#define\s+ABSL_ATTRIBUTE_LIFETIME_BOUND\s+.*',
+                            '#define ABSL_ATTRIBUTE_LIFETIME_BOUND',
+                            content
+                        )
+                        if new_content != content:
+                            content = new_content
+                            changed = True
+
+                    # 2. Удаляем ABSL_ATTRIBUTE_LIFETIME_BOUND у функций с возвращаемым типом void
+                    if "ABSL_ATTRIBUTE_LIFETIME_BOUND" in content and "void " in content:
+                        new_content = re.sub(
+                            r'(void\s+\w+\([^)]*)\bABSL_ATTRIBUTE_LIFETIME_BOUND\b',
+                            r'\1',
+                            content
+                        )
+                        if new_content != content:
+                            content = new_content
+                            changed = True
+
+                    if changed:
+                        with open(fpath, "w", encoding="utf-8") as f:
+                            f.write(content)
+                        count += 1
+                except Exception:
+                    pass
+    log(f"Патч lifetimebound применен к {count} файлам WebRTC/Abseil.")
+
 def setup_configuration_repository(target_repo):
     log("Создание и настройка configuration-repository для Bazel...")
     config_repo = os.path.join(target_repo, "build-input", "configuration-repository")
@@ -501,6 +547,9 @@ def apply_all_modifications(target_repo):
 
     # 7. Устранение -Werror и фикс VLA / kMemoryChunkSize под Xcode 16 Clang
     patch_clang_warnings_and_werror(target_repo)
+
+    # 8. Патч WebRTC / Abseil (фикс [[clang::lifetimebound]] на void функциях под Xcode 16)
+    patch_webrtc_lifetime_bound(target_repo)
 
     # 6. Создание и настройка configuration-repository для Bazel
     setup_configuration_repository(target_repo)
