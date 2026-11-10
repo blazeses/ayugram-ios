@@ -734,6 +734,62 @@ sys.exit(subprocess.call([sys.executable, real_make] + args, env=os.environ))
     os.chmod(make_py, 0o755)
     log("Установлен Make-Wrapper.")
 
+def setup_bazelisk_wrapper(target_repo):
+    """
+    Устанавливает перехватчик bazelisk, который после успешной сборки
+    автоматически распаковывает Telegram.ipa в bazel-bin/Telegram/Telegram.app,
+    чтобы шаг упаковки workflow (Step 9) выполнился гарантированно успешно.
+    """
+    log("Настройка перехватчика bazelisk для постобработки артефактов...")
+    candidates = []
+    which_bazelisk = shutil.which("bazelisk")
+    if which_bazelisk:
+        candidates.append(os.path.realpath(which_bazelisk))
+    for p in ["/opt/homebrew/bin/bazelisk", "/usr/local/bin/bazelisk", "/usr/bin/bazelisk"]:
+        if os.path.exists(p) and p not in candidates:
+            candidates.append(p)
+    
+    for bin_path in candidates:
+        real_bin = bin_path + ".real"
+        if os.path.exists(bin_path) and not os.path.exists(real_bin):
+            try:
+                os.rename(bin_path, real_bin)
+                wrapper_content = f"""#!/bin/bash
+"{real_bin}" "$@"
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    echo "=== [AyuGram] Post-build: Extracting Telegram.app from Telegram.ipa ==="
+    if [ -f "bazel-bin/Telegram/Telegram.ipa" ]; then
+        echo "=== [AyuGram] Found bazel-bin/Telegram/Telegram.ipa ==="
+        rm -rf /tmp/extracted_app
+        mkdir -p /tmp/extracted_app
+        /usr/bin/unzip -q bazel-bin/Telegram/Telegram.ipa -d /tmp/extracted_app/
+        mkdir -p bazel-bin/Telegram
+        cp -r /tmp/extracted_app/Payload/Telegram.app bazel-bin/Telegram/Telegram.app
+        echo "=== [AyuGram] Successfully populated bazel-bin/Telegram/Telegram.app ==="
+    else
+        echo "=== [AyuGram] Searching for any .ipa in bazel-bin... ==="
+        IPA_PATH=$(find bazel-bin -name "*.ipa" | head -n 1)
+        if [ -n "$IPA_PATH" ]; then
+            echo "=== [AyuGram] Found $IPA_PATH ==="
+            rm -rf /tmp/extracted_app
+            mkdir -p /tmp/extracted_app
+            /usr/bin/unzip -q "$IPA_PATH" -d /tmp/extracted_app/
+            mkdir -p bazel-bin/Telegram
+            cp -r /tmp/extracted_app/Payload/Telegram.app bazel-bin/Telegram/Telegram.app
+            echo "=== [AyuGram] Successfully populated bazel-bin/Telegram/Telegram.app from $IPA_PATH ==="
+        fi
+    fi
+fi
+exit $EXIT_CODE
+"""
+                with open(bin_path, "w", encoding="utf-8") as f:
+                    f.write(wrapper_content)
+                os.chmod(bin_path, 0o755)
+                log(f"Перехватчик bazelisk успешно установлен в {bin_path}")
+            except Exception as e:
+                log(f"Не удалось установить перехватчик в {bin_path}: {e}")
+
 def apply_all_modifications(target_repo):
     # 1. Фоновые режимы (Keep-Alive аудио / voip) в Info.plist
     info_plist_paths = [
@@ -816,6 +872,9 @@ def apply_all_modifications(target_repo):
 
     # 9. Установка перехватчика сборочной системы Make.py
     setup_make_wrapper(target_repo)
+
+    # 10. Установка перехватчика bazelisk для гарантированной упаковки в IPA
+    setup_bazelisk_wrapper(target_repo)
 
     log("Все модификации AyuGram успешно применены!")
 
