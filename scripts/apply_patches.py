@@ -336,6 +336,31 @@ def patch_webrtc_lifetime_bound(target_repo):
                     pass
     log(f"Патч lifetimebound применен к {count} файлам WebRTC/Abseil.")
 
+def patch_swift_deprecations(target_repo):
+    log("Патч устаревших Swift API для Xcode 16 (allowBluetooth -> allowBluetoothHFP)...")
+    submodules_dir = os.path.join(target_repo, "submodules")
+    if not os.path.isdir(submodules_dir):
+        return
+
+    count = 0
+    for root, dirs, files in os.walk(submodules_dir):
+        for file in files:
+            if file.endswith(".swift"):
+                fpath = os.path.join(root, file)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        c = f.read()
+                    if ".allowBluetooth" in c:
+                        new_c = re.sub(r'\.allowBluetooth\b(?![A-Za-z0-9_])', '.allowBluetoothHFP', c)
+                        if new_c != c:
+                            with open(fpath, "w", encoding="utf-8") as f:
+                                f.write(new_c)
+                            log(f"Заменен .allowBluetooth -> .allowBluetoothHFP в {os.path.relpath(fpath, target_repo)}")
+                            count += 1
+                except Exception:
+                    pass
+    log(f"Swift deprecation патч применен к {count} файлам.")
+
 def setup_configuration_repository(target_repo):
     log("Создание и настройка configuration-repository для Bazel...")
     config_repo = os.path.join(target_repo, "build-input", "configuration-repository")
@@ -550,6 +575,9 @@ def apply_all_modifications(target_repo):
 
     # 8. Патч WebRTC / Abseil (фикс [[clang::lifetimebound]] на void функциях под Xcode 16)
     patch_webrtc_lifetime_bound(target_repo)
+
+    # 9. Патч устаревших Swift API под Xcode 16 (allowBluetooth -> allowBluetoothHFP)
+    patch_swift_deprecations(target_repo)
 
     # 6. Создание и настройка configuration-repository для Bazel
     setup_configuration_repository(target_repo)
