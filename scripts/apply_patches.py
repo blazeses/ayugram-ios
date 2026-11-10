@@ -388,9 +388,20 @@ def patch_swift_deprecations(target_repo):
                     if ".allowBluetooth" in c:
                         new_c = re.sub(r'\.allowBluetooth\b(?![A-Za-z0-9_])', '.allowBluetoothHFP', c)
                         if new_c != c:
+                            c = new_c
                             with open(fpath, "w", encoding="utf-8") as f:
-                                f.write(new_c)
+                                f.write(c)
                             log(f"Заменен .allowBluetooth -> .allowBluetoothHFP в {os.path.relpath(fpath, target_repo)}")
+                            count += 1
+                    
+                    if "weak var " in c:
+                        # Исправление ошибки Swift 6: weak variable was never mutated; consider changing to 'let' constant [#WeakMutability]
+                        new_c = re.sub(r'\bweak\s+var\s+([A-Za-z0-9_]+)\s*=\s*([A-Za-z0-9_.]+)', r'let \1 = \2', c)
+                        if new_c != c:
+                            c = new_c
+                            with open(fpath, "w", encoding="utf-8") as f:
+                                f.write(c)
+                            log(f"Заменен weak var -> let в {os.path.relpath(fpath, target_repo)}")
                             count += 1
                 except Exception:
                     pass
