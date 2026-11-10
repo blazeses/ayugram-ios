@@ -174,6 +174,42 @@ def fix_apple_support_uuid(target_repo):
                     pass
     log(f"Патч LC_UUID применен к {count} файлам правил тулчейна.")
 
+def patch_posix_headers(target_repo):
+    log("Патч POSIX/socket заголовков для Clang modules (Xcode 16+)...")
+    submodules_dir = os.path.join(target_repo, "submodules")
+    if not os.path.isdir(submodules_dir):
+        return
+
+    # 1. PingFoundation.h
+    pf_header = os.path.join(submodules_dir, "MtProtoKit", "Sources", "PingFoundation.h")
+    if os.path.isfile(pf_header):
+        with open(pf_header, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        if "<sys/socket.h>" not in content:
+            new_content = "#import <sys/types.h>\n#import <sys/socket.h>\n#import <netinet/in.h>\n#import <arpa/inet.h>\n" + content
+            with open(pf_header, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            log("Добавлены POSIX сокет заголовки в PingFoundation.h")
+
+    # 2. Сканируем все .h и .m в submodules на предмет sa_family_t
+    count = 0
+    for root, dirs, files in os.walk(submodules_dir):
+        for file in files:
+            if file.endswith((".h", ".m", ".c", ".mm")):
+                fpath = os.path.join(root, file)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        txt = f.read()
+                    if "sa_family_t" in txt and "<sys/socket.h>" not in txt:
+                        txt = "#import <sys/types.h>\n#import <sys/socket.h>\n#import <netinet/in.h>\n#import <arpa/inet.h>\n" + txt
+                        with open(fpath, "w", encoding="utf-8") as f:
+                            f.write(txt)
+                        log(f"Добавлены POSIX сокет заголовки в {os.path.relpath(fpath, target_repo)}")
+                        count += 1
+                except Exception:
+                    pass
+    log(f"POSIX сокет заголовки проверены и обновлены (дополнительно обновлено: {count} файлов).")
+
 def setup_configuration_repository(target_repo):
     log("Создание и настройка configuration-repository для Bazel...")
     config_repo = os.path.join(target_repo, "build-input", "configuration-repository")
@@ -375,6 +411,9 @@ def apply_all_modifications(target_repo):
     # 5. Патч mozjpeg и yasm для совместимости с CMake >= 3.31
     patch_mozjpeg(target_repo)
     patch_third_party_cmake(target_repo)
+
+    # 6. Патч POSIX сокет заголовков (sa_family_t) для Clang modules на Xcode 16
+    patch_posix_headers(target_repo)
 
     # 6. Создание и настройка configuration-repository для Bazel
     setup_configuration_repository(target_repo)
