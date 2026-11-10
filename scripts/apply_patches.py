@@ -408,7 +408,7 @@ def patch_postbox_encoding_container(target_repo):
         if re.search(target_pattern, content):
             content = re.sub(target_pattern, "\n    // encode(_ value: Data) moved to extension below for Swift 6 compatibility\n", content)
             content += """\n
-extension AdaptedPostboxUnkeyedEncodingContainer {
+extension _AdaptedPostboxEncoder.UnkeyedContainer {
     func encode(_ value: Data) throws {
         self.items.append(.data(value))
     }
