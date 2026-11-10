@@ -306,21 +306,33 @@ def patch_webrtc_lifetime_bound(target_repo):
                         content = f.read()
                     changed = False
 
-                    # 1. Отключаем макрос ABSL_ATTRIBUTE_LIFETIME_BOUND в Abseil
-                    if "ABSL_ATTRIBUTE_LIFETIME_BOUND" in content:
-                        new_content = re.sub(
-                            r'#define\s+ABSL_ATTRIBUTE_LIFETIME_BOUND\s+.*',
-                            '#define ABSL_ATTRIBUTE_LIFETIME_BOUND',
-                            content
+                    # 1. Безопасное отключение макроса в Abseil (без повреждения #if/#endif)
+                    if "#define ABSL_ATTRIBUTE_LIFETIME_BOUND [[clang::lifetimebound]]" in content:
+                        content = content.replace(
+                            "#define ABSL_ATTRIBUTE_LIFETIME_BOUND [[clang::lifetimebound]]",
+                            "#define ABSL_ATTRIBUTE_LIFETIME_BOUND"
                         )
-                        if new_content != content:
-                            content = new_content
-                            changed = True
+                        changed = True
 
-                    # 2. Удаляем ABSL_ATTRIBUTE_LIFETIME_BOUND у функций с возвращаемым типом void
-                    if "ABSL_ATTRIBUTE_LIFETIME_BOUND" in content and "void " in content:
+                    if "#define ABSL_ATTRIBUTE_LIFETIME_BOUND __attribute__((lifetimebound))" in content:
+                        content = content.replace(
+                            "#define ABSL_ATTRIBUTE_LIFETIME_BOUND __attribute__((lifetimebound))",
+                            "#define ABSL_ATTRIBUTE_LIFETIME_BOUND"
+                        )
+                        changed = True
+
+                    # 2. Точечное исправление candidate.h
+                    if "void set_type(absl::string_view type ABSL_ATTRIBUTE_LIFETIME_BOUND)" in content:
+                        content = content.replace(
+                            "void set_type(absl::string_view type ABSL_ATTRIBUTE_LIFETIME_BOUND)",
+                            "void set_type(absl::string_view type)"
+                        )
+                        changed = True
+
+                    # 3. Однострочная замена на случай других void функций (только в пределах одной строки [^\n]!)
+                    if "ABSL_ATTRIBUTE_LIFETIME_BOUND" in content and "void" in content:
                         new_content = re.sub(
-                            r'(void\s+\w+\([^)]*)\bABSL_ATTRIBUTE_LIFETIME_BOUND\b',
+                            r'(void\s+[A-Za-z0-9_:]+\([^\n)]*)\bABSL_ATTRIBUTE_LIFETIME_BOUND\b',
                             r'\1',
                             content
                         )
@@ -334,7 +346,7 @@ def patch_webrtc_lifetime_bound(target_repo):
                         count += 1
                 except Exception:
                     pass
-    log(f"Патч lifetimebound применен к {count} файлам WebRTC/Abseil.")
+    log(f"Патч lifetimebound безопасно применен к {count} файлам WebRTC/Abseil.")
 
 def patch_swift_deprecations(target_repo):
     log("Патч устаревших Swift API для Xcode 16 (allowBluetooth -> allowBluetoothHFP)...")
