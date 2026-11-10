@@ -395,6 +395,51 @@ extension AdaptedPostboxUnkeyedEncodingContainer {
                 f.write(content)
             log("encode(_ value: Data) вынесен в extension в AdaptedPostboxUnkeyedEncodingContainer.swift")
 
+def setup_metal_toolchain(target_repo):
+    log("Настройка Metal Toolchain для компиляции шейдеров (Xcode 16)...")
+    
+    # 1. Скачиваем официальный компонент MetalToolchain через sudo xcodebuild
+    try:
+        log("Запуск sudo xcodebuild -downloadComponent MetalToolchain...")
+        res = subprocess.run(
+            ["sudo", "xcodebuild", "-downloadComponent", "MetalToolchain"],
+            capture_output=True,
+            text=True,
+            timeout=180
+        )
+        log(f"xcodebuild результат (код {res.returncode}): {res.stdout.strip()[:200]}")
+    except Exception as e:
+        log(f"xcodebuild -downloadComponent не удался: {e}")
+
+    # 2. Проверяем, доступен ли metal через xcrun
+    try:
+        check_metal = subprocess.run(["xcrun", "--find", "metal"], capture_output=True, text=True)
+        if check_metal.returncode == 0 and check_metal.stdout.strip():
+            log(f"Metal toolchain найден: {check_metal.stdout.strip()}")
+            return
+    except Exception:
+        pass
+
+    # 3. Fallback: поиск в других установленных версиях Xcode
+    try:
+        xcode_dev = subprocess.check_output(["xcode-select", "-p"], text=True).strip()
+        target_bin = os.path.join(xcode_dev, "Toolchains", "XcodeDefault.xctoolchain", "usr", "bin")
+        os.makedirs(target_bin, exist_ok=True)
+        
+        for xc in sorted(os.listdir("/Applications"), reverse=True):
+            if xc.startswith("Xcode") and xc.endswith(".app"):
+                cand = f"/Applications/{xc}/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/metal"
+                if os.path.isfile(cand):
+                    log(f"Копирование metal из {cand} в {target_bin}...")
+                    subprocess.run(["sudo", "cp", "-P", f"{os.path.dirname(cand)}/metal*", target_bin], check=False)
+                    cand_lib = os.path.normpath(os.path.join(os.path.dirname(cand), "..", "lib"))
+                    target_lib = os.path.normpath(os.path.join(target_bin, "..", "lib"))
+                    if os.path.isdir(cand_lib):
+                        subprocess.run(["sudo", "cp", "-R", cand_lib, target_lib], check=False)
+                    break
+    except Exception as e:
+        log(f"Поиск альтернативного metal не удался: {e}")
+
 def setup_configuration_repository(target_repo):
     log("Создание и настройка configuration-repository для Bazel...")
     config_repo = os.path.join(target_repo, "build-input", "configuration-repository")
@@ -615,6 +660,9 @@ def apply_all_modifications(target_repo):
 
     # 10. Патч Postbox AdaptedPostboxUnkeyedEncodingContainer под Swift 6 / iOS 18
     patch_postbox_encoding_container(target_repo)
+
+    # 11. Установка и настройка Metal Toolchain под Xcode 16
+    setup_metal_toolchain(target_repo)
 
     # 6. Создание и настройка configuration-repository для Bazel
     setup_configuration_repository(target_repo)
