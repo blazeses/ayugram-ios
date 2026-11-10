@@ -271,24 +271,30 @@ def patch_clang_warnings_and_werror(target_repo):
                 f.write(p_new)
             log("Исправлен kMemoryChunkSize (VLA -> enum compile-time constant) в MTInternalMessageParser.m")
 
-    # 2. Удаление -Werror во всех сборочных файлах submodules
+    # 2. Удаление -Werror и -warnings-as-errors во всех сборочных файлах репозитория и подмодулей
     count = 0
-    for root, dirs, files in os.walk(submodules_dir):
+    for root, dirs, files in os.walk(target_repo):
+        if ".git" in root or "bazel-" in root:
+            continue
         for file in files:
             if file in ("BUILD", "BUILD.bazel") or file.endswith(".bzl"):
                 fpath = os.path.join(root, file)
                 try:
                     with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
                         content = f.read()
-                    if '"-Werror"' in content or "'-Werror'" in content or "-Werror" in content:
-                        new_content = content.replace('"-Werror"', '"-Wno-error"')
+                    new_content = content
+                    if '"-Werror"' in new_content or "'-Werror'" in new_content or "-Werror" in new_content:
+                        new_content = new_content.replace('"-Werror"', '"-Wno-error"')
                         new_content = new_content.replace("'-Werror'", "'-Wno-error'")
+                    if "-warnings-as-errors" in new_content:
+                        new_content = re.sub(r'["\']-warnings-as-errors["\']\s*,?', '', new_content)
+                    if new_content != content:
                         with open(fpath, "w", encoding="utf-8") as f:
                             f.write(new_content)
                         count += 1
                 except Exception:
                     pass
-    log(f"Удалены жесткие флаги -Werror из {count} сборочных файлов подмодулей.")
+    log(f"Удалены жесткие флаги -Werror и -warnings-as-errors из {count} сборочных файлов.")
 
     # 3. Преобразование static const VLA в enum во всех заголовочных файлах подмодулей (AsyncDisplayKit и др.)
     vla_count = 0
@@ -405,6 +411,21 @@ def patch_swift_deprecations(target_repo):
                             count += 1
                 except Exception:
                     pass
+
+    # Патч @retroactive conformance под Swift 6 для TelegramPresentationData
+    theme_codable = os.path.join(target_repo, "submodules", "TelegramPresentationData", "Sources", "PresentationThemeCodable.swift")
+    if os.path.isfile(theme_codable):
+        try:
+            with open(theme_codable, "r", encoding="utf-8", errors="ignore") as f:
+                tc = f.read()
+            if "extension PresentationBuiltinThemeReference: Codable" in tc:
+                tc = tc.replace("extension PresentationBuiltinThemeReference: Codable", "extension PresentationBuiltinThemeReference: @retroactive Codable")
+                with open(theme_codable, "w", encoding="utf-8") as f:
+                    f.write(tc)
+                log("Добавлен @retroactive к PresentationBuiltinThemeReference: Codable в PresentationThemeCodable.swift")
+        except Exception:
+            pass
+
     log(f"Swift deprecation патч применен к {count} файлам.")
 
 def patch_postbox_encoding_container(target_repo):
