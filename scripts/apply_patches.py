@@ -12,6 +12,7 @@ import shutil
 import json
 import subprocess
 import re
+import tarfile
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AYU_CORE_DIR = os.path.join(BASE_DIR, "AyuCore", "Sources")
@@ -93,35 +94,73 @@ def patch_third_party_cmake(target_repo):
     if not os.path.isdir(tp_dir):
         return
 
-    # 1. Точечный патч third-party/yasm/BUILD
+    # 1. Прямой патч архива third-party/yasm/yasm-1.3.0.tar.gz
+    yasm_tar = os.path.join(tp_dir, "yasm", "yasm-1.3.0.tar.gz")
+    if os.path.isfile(yasm_tar):
+        temp_extract = os.path.join(tp_dir, "yasm", "_temp_yasm")
+        try:
+            if os.path.exists(temp_extract):
+                shutil.rmtree(temp_extract)
+            with tarfile.open(yasm_tar, "r:gz") as tar:
+                tar.extractall(temp_extract)
+
+            # а) CMakeLists.txt
+            cm_path = os.path.join(temp_extract, "yasm-1.3.0", "CMakeLists.txt")
+            if os.path.isfile(cm_path):
+                with open(cm_path, "r", encoding="utf-8", errors="ignore") as f:
+                    c = f.read()
+                c = re.sub(r'cmake_minimum_required\(VERSION [0-9.]+\)', 'cmake_minimum_required(VERSION 3.5)\ncmake_policy(SET CMP0026 OLD)', c, flags=re.I)
+                with open(cm_path, "w", encoding="utf-8") as f:
+                    f.write(c)
+
+            # б) YasmMacros.cmake: замена get_target_property(... LOCATION) на set(var target)
+            ym_path = os.path.join(temp_extract, "yasm-1.3.0", "cmake", "modules", "YasmMacros.cmake")
+            if os.path.isfile(ym_path):
+                with open(ym_path, "r", encoding="utf-8", errors="ignore") as f:
+                    c = f.read()
+                c = re.sub(r'get_target_property\s*\(\s*(\w+)\s+(\w+)\s+LOCATION\s*\)', r'set(\1 \2)', c)
+                with open(ym_path, "w", encoding="utf-8") as f:
+                    f.write(c)
+
+            # в) Переупаковка
+            with tarfile.open(yasm_tar, "w:gz") as tar:
+                for item in os.listdir(temp_extract):
+                    tar.add(os.path.join(temp_extract, item), arcname=item)
+            log("Архив yasm-1.3.0.tar.gz успешно модифицирован и переупакован с CMP0026 фиксом!")
+        except Exception as e:
+            log(f"Предупреждение при переупаковке yasm-1.3.0.tar.gz: {e}")
+        finally:
+            if os.path.exists(temp_extract):
+                shutil.rmtree(temp_extract, ignore_errors=True)
+
+    # 2. Точечный патч third-party/yasm/BUILD
     yasm_build = os.path.join(tp_dir, "yasm", "BUILD")
     if os.path.isfile(yasm_build):
         with open(yasm_build, "r", encoding="utf-8", errors="ignore") as f:
             yasm_content = f.read()
 
-        # Заменяем приоритет PATH и инжектим исправление CMakeLists.txt перед запуском cmake
-        old_pattern = 'PATH="$$PATH:$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin" cmake .. -DYASM_BUILD_TESTS=OFF'
-        new_pattern = 'sed -i \'\' \'s/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/gI\' ../CMakeLists.txt || true\n    PATH="$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin:$$PATH" cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DYASM_BUILD_TESTS=OFF'
-        if old_pattern in yasm_content:
-            yasm_content = yasm_content.replace(old_pattern, new_pattern)
-            with open(yasm_build, "w", encoding="utf-8") as f:
-                f.write(yasm_content)
-            log("Патч third-party/yasm/BUILD успешно применен!")
-        else:
-            # Fallback на случай вариаций пробелов/переносов
-            yasm_content = yasm_content.replace(
-                'PATH="$$PATH:$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin"',
-                'PATH="$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin:$$PATH"'
-            )
-            yasm_content = yasm_content.replace(
-                'cmake .. -DYASM_BUILD_TESTS=OFF',
-                'cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DYASM_BUILD_TESTS=OFF'
-            )
-            with open(yasm_build, "w", encoding="utf-8") as f:
-                f.write(yasm_content)
-            log("Fallback патч third-party/yasm/BUILD применен.")
+        # Убираем ранее добавленные sed команды
+        yasm_content = re.sub(r"sed -i '' [^\n]+\n\s*", "", yasm_content)
+        
+        # Исправляем PATH
+        yasm_content = re.sub(
+            r'PATH="[^"]*CMAKE_DIR[^"]*"',
+            'PATH="$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin:$$PATH"',
+            yasm_content
+        )
 
-    # 2. Общий сканер всех сборочных файлов third-party на предмет CMake
+        # Добавляем политики CMP0026 и CMP0042
+        if "-DCMAKE_POLICY_DEFAULT_CMP0026=OLD" not in yasm_content:
+            yasm_content = yasm_content.replace(
+                "cmake ..",
+                "cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_POLICY_DEFAULT_CMP0026=OLD"
+            )
+
+        with open(yasm_build, "w", encoding="utf-8") as f:
+            f.write(yasm_content)
+        log("Сборочный файл third-party/yasm/BUILD успешно обновлен.")
+
+    # 3. Общий сканер всех сборочных файлов third-party на предмет CMake
     for root, dirs, files in os.walk(tp_dir):
         for file in files:
             if file in ("BUILD", "BUILD.bazel") or file.endswith(".sh"):
@@ -139,9 +178,9 @@ def patch_third_party_cmake(target_repo):
                         txt = re.sub(r'PATH="(\$PATH):(\$CMAKE_DIR/[^"]+)"', r'PATH="\2:\1"', txt)
                         changed = True
 
-                    # Добавление CMAKE_POLICY_VERSION_MINIMUM=3.5
+                    # Добавление CMAKE_POLICY_VERSION_MINIMUM=3.5 и CMP0026=OLD
                     if "cmake .." in txt and "CMAKE_POLICY_VERSION_MINIMUM" not in txt:
-                        txt = txt.replace("cmake ..", "cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5")
+                        txt = txt.replace("cmake ..", "cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_POLICY_DEFAULT_CMP0026=OLD")
                         changed = True
 
                     if changed:
