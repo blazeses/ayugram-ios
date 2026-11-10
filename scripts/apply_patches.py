@@ -488,6 +488,40 @@ extension {cls_name}: ASAuthorizationControllerDelegate, ASAuthorizationControll
                     pass
     log(f"ASAuthorizationControllerDelegate патч применен к {count} файлам.")
 
+def patch_current_app_configuration(target_repo):
+    log("Патч currentAppConfiguration для устранения undefined symbol в TelegramUIFramework...")
+    
+    # 1. Добавляем локальный хелпер в TelegramAccountAuxiliaryMethods.swift
+    aux_path = os.path.join(target_repo, "submodules", "TelegramUI", "Components", "TelegramAccountAuxiliaryMethods", "Sources", "TelegramAccountAuxiliaryMethods.swift")
+    if os.path.isfile(aux_path):
+        with open(aux_path, "r", encoding="utf-8", errors="ignore") as f:
+            c = f.read()
+        helper = """\n
+private func currentAppConfiguration(transaction: Transaction) -> AppConfiguration {
+    if let entry = transaction.getPreferencesEntry(key: PreferencesKeys.appConfiguration)?.get(AppConfiguration.self) {
+        return entry
+    } else {
+        return AppConfiguration.defaultValue
+    }
+}
+"""
+        if "private func currentAppConfiguration" not in c:
+            c = helper + c
+            with open(aux_path, "w", encoding="utf-8") as f:
+                f.write(c)
+            log("Добавлен локальный currentAppConfiguration в TelegramAccountAuxiliaryMethods.swift")
+
+    # 2. Помечаем @inlinable в AppConfiguration.swift
+    app_config_path = os.path.join(target_repo, "submodules", "TelegramCore", "Sources", "State", "AppConfiguration.swift")
+    if os.path.isfile(app_config_path):
+        with open(app_config_path, "r", encoding="utf-8", errors="ignore") as f:
+            c = f.read()
+        if "@inlinable" not in c and "public func currentAppConfiguration" in c:
+            c = c.replace("public func currentAppConfiguration", "@inlinable\npublic func currentAppConfiguration")
+            with open(app_config_path, "w", encoding="utf-8") as f:
+                f.write(c)
+            log("Добавлен @inlinable к currentAppConfiguration в AppConfiguration.swift")
+
 def setup_metal_toolchain(target_repo):
     log("Настройка Metal Toolchain для компиляции шейдеров (Xcode 16)...")
     
@@ -761,6 +795,9 @@ def apply_all_modifications(target_repo):
 
     # 10.1 Патч доступности протоколов iOS 13+ (ASAuthorizationControllerDelegate) под Swift 6
     patch_ios13_protocol_availability(target_repo)
+
+    # 10.2 Патч currentAppConfiguration для устранения undefined symbol в TelegramUIFramework
+    patch_current_app_configuration(target_repo)
 
     # 11. Установка и настройка Metal Toolchain под Xcode 16
     setup_metal_toolchain(target_repo)
