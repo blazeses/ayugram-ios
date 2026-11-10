@@ -413,8 +413,6 @@ def configure_bazelrc(target_repo):
         "build --copt=-Wno-error",
         "build --copt=-Wno-gnu-folding-constant",
         "build --copt=-Wno-vla-extension",
-        "build --objc_opt=-Wno-error",
-        "build --objc_opt=-Wno-gnu-folding-constant",
         "build --cxxopt=-Wno-error",
         "build --announce_rc",
         "build --verbose_failures",
