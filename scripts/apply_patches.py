@@ -290,6 +290,29 @@ def patch_clang_warnings_and_werror(target_repo):
                     pass
     log(f"Удалены жесткие флаги -Werror из {count} сборочных файлов подмодулей.")
 
+    # 3. Преобразование static const VLA в enum во всех заголовочных файлах подмодулей (AsyncDisplayKit и др.)
+    vla_count = 0
+    for root, dirs, files in os.walk(submodules_dir):
+        for file in files:
+            if file.endswith((".h", ".m", ".mm")):
+                fpath = os.path.join(root, file)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        c = f.read()
+                    if "kMaxLayoutElement" in c or "kMemoryChunkSize" in c or "Extensions[" in c:
+                        new_c = re.sub(
+                            r'static\s+const\s+(?:int|NSInteger|NSUInteger|size_t|uint32_t)\s+(k[A-Za-z0-9_]+)\s*=\s*([^;]+);',
+                            r'enum { \1 = \2 };',
+                            c
+                        )
+                        if new_c != c:
+                            with open(fpath, "w", encoding="utf-8") as f:
+                                f.write(new_c)
+                            vla_count += 1
+                except Exception:
+                    pass
+    log(f"Константы VLA преобразованы в enum в {vla_count} файлах подмодулей (включая AsyncDisplayKit).")
+
 def patch_webrtc_lifetime_bound(target_repo):
     log("Патч WebRTC и Abseil (фикс [[clang::lifetimebound]] на Xcode 16)...")
     tp_dir = os.path.join(target_repo, "third-party")
@@ -564,6 +587,10 @@ def configure_bazelrc(target_repo):
         "build --copt=-Wno-gnu-folding-constant",
         "build --copt=-Wno-vla-extension",
         "build --cxxopt=-Wno-error",
+        "build --swiftcopt=-Xcc",
+        "build --swiftcopt=-Wno-gnu-folding-constant",
+        "build --swiftcopt=-Xcc",
+        "build --swiftcopt=-Wno-vla-extension",
         "build --announce_rc",
         "build --verbose_failures",
         ""
