@@ -52,6 +52,40 @@ def patch_file(filepath, search_str, replace_str, description):
     log(f"Успешно модифицирован {os.path.basename(filepath)} ({description})")
     return True
 
+def patch_mozjpeg(target_repo):
+    log("Патч third-party/mozjpeg для совместимости с CMake >= 3.31...")
+    # 1. Замена версии CMake в CMakeLists.txt
+    cm_path = os.path.join(target_repo, "third-party", "mozjpeg", "mozjpeg", "CMakeLists.txt")
+    if os.path.isfile(cm_path):
+        patch_file(
+            cm_path,
+            "cmake_minimum_required(VERSION 2.8.12)",
+            "cmake_minimum_required(VERSION 3.5)",
+            "Минимальная версия CMake в mozjpeg"
+        )
+    # 2. Флаг политики в build-mozjpeg-bazel.sh
+    sh_path = os.path.join(target_repo, "third-party", "mozjpeg", "build-mozjpeg-bazel.sh")
+    if os.path.isfile(sh_path):
+        with open(sh_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+        if "CMAKE_POLICY_VERSION_MINIMUM" not in content:
+            content = content.replace(
+                'cmake -G"Unix Makefiles"',
+                'cmake -G"Unix Makefiles" -DCMAKE_POLICY_VERSION_MINIMUM=3.5'
+            )
+            with open(sh_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            log("Добавлен флаг CMAKE_POLICY_VERSION_MINIMUM=3.5 в build-mozjpeg-bazel.sh")
+    # 3. Приоритет встроенного CMake 3.23.1 перед системным
+    build_path = os.path.join(target_repo, "third-party", "mozjpeg", "BUILD")
+    if os.path.isfile(build_path):
+        patch_file(
+            build_path,
+            'PATH="$$PATH:$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin"',
+            'PATH="$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin:$$PATH"',
+            "Приоритет встроенного CMake перед системным в mozjpeg BUILD"
+        )
+
 def fix_apple_support_uuid(target_repo):
     log("Устранение флагов -Wl,-no_uuid в apple_support (фикс dyld missing LC_UUID на macOS 15)...")
     # Ищем все файлы universal_exec_tool.bzl в репозитории
@@ -273,7 +307,10 @@ def apply_all_modifications(target_repo):
     # 4. Удаление флагов -no_uuid в apple_support (фикс dyld missing LC_UUID)
     fix_apple_support_uuid(target_repo)
 
-    # 5. Создание и настройка configuration-repository для Bazel
+    # 5. Патч mozjpeg для совместимости с CMake >= 3.31
+    patch_mozjpeg(target_repo)
+
+    # 6. Создание и настройка configuration-repository для Bazel
     setup_configuration_repository(target_repo)
 
     # 6. Валидный конфигурационный файл сборки без плейсхолдеров
