@@ -373,6 +373,28 @@ def patch_swift_deprecations(target_repo):
                     pass
     log(f"Swift deprecation патч применен к {count} файлам.")
 
+def patch_postbox_encoding_container(target_repo):
+    log("Патч Postbox AdaptedPostboxUnkeyedEncodingContainer под Swift 6 / iOS 18 SDK...")
+    p_path = os.path.join(target_repo, "submodules", "Postbox", "Sources", "Utils", "Encoder", "AdaptedPostboxUnkeyedEncodingContainer.swift")
+    if os.path.isfile(p_path):
+        with open(p_path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+
+        # Вырезаем encode(_ value: Data) из тела класса и переносим в extension для устранения near-miss ошибки в Swift 6
+        target_pattern = r'(\s*func encode\(_ value: Data\) throws \{\s*self\.items\.append\(\.data\(value\)\)\s*\})'
+        if re.search(target_pattern, content):
+            content = re.sub(target_pattern, "\n    // encode(_ value: Data) moved to extension below for Swift 6 compatibility\n", content)
+            content += """\n
+extension AdaptedPostboxUnkeyedEncodingContainer {
+    func encode(_ value: Data) throws {
+        self.items.append(.data(value))
+    }
+}
+"""
+            with open(p_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            log("encode(_ value: Data) вынесен в extension в AdaptedPostboxUnkeyedEncodingContainer.swift")
+
 def setup_configuration_repository(target_repo):
     log("Создание и настройка configuration-repository для Bazel...")
     config_repo = os.path.join(target_repo, "build-input", "configuration-repository")
@@ -590,6 +612,9 @@ def apply_all_modifications(target_repo):
 
     # 9. Патч устаревших Swift API под Xcode 16 (allowBluetooth -> allowBluetoothHFP)
     patch_swift_deprecations(target_repo)
+
+    # 10. Патч Postbox AdaptedPostboxUnkeyedEncodingContainer под Swift 6 / iOS 18
+    patch_postbox_encoding_container(target_repo)
 
     # 6. Создание и настройка configuration-repository для Bazel
     setup_configuration_repository(target_repo)
