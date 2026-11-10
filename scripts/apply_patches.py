@@ -11,6 +11,7 @@ import sys
 import shutil
 import json
 import subprocess
+import re
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 AYU_CORE_DIR = os.path.join(BASE_DIR, "AyuCore", "Sources")
@@ -85,6 +86,70 @@ def patch_mozjpeg(target_repo):
             'PATH="$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin:$$PATH"',
             "Приоритет встроенного CMake перед системным в mozjpeg BUILD"
         )
+
+def patch_third_party_cmake(target_repo):
+    log("Комплексный патч third-party пакетов (yasm, mozjpeg, etc.) под CMake >= 3.31...")
+    tp_dir = os.path.join(target_repo, "third-party")
+    if not os.path.isdir(tp_dir):
+        return
+
+    # 1. Точечный патч third-party/yasm/BUILD
+    yasm_build = os.path.join(tp_dir, "yasm", "BUILD")
+    if os.path.isfile(yasm_build):
+        with open(yasm_build, "r", encoding="utf-8", errors="ignore") as f:
+            yasm_content = f.read()
+
+        # Заменяем приоритет PATH и инжектим исправление CMakeLists.txt перед запуском cmake
+        old_pattern = 'PATH="$$PATH:$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin" cmake .. -DYASM_BUILD_TESTS=OFF'
+        new_pattern = 'sed -i \'\' \'s/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.5)/gI\' ../CMakeLists.txt || true\n    PATH="$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin:$$PATH" cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DYASM_BUILD_TESTS=OFF'
+        if old_pattern in yasm_content:
+            yasm_content = yasm_content.replace(old_pattern, new_pattern)
+            with open(yasm_build, "w", encoding="utf-8") as f:
+                f.write(yasm_content)
+            log("Патч third-party/yasm/BUILD успешно применен!")
+        else:
+            # Fallback на случай вариаций пробелов/переносов
+            yasm_content = yasm_content.replace(
+                'PATH="$$PATH:$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin"',
+                'PATH="$$CMAKE_DIR/cmake-3.23.1-macos-universal/CMake.app/Contents/bin:$$PATH"'
+            )
+            yasm_content = yasm_content.replace(
+                'cmake .. -DYASM_BUILD_TESTS=OFF',
+                'cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DYASM_BUILD_TESTS=OFF'
+            )
+            with open(yasm_build, "w", encoding="utf-8") as f:
+                f.write(yasm_content)
+            log("Fallback патч third-party/yasm/BUILD применен.")
+
+    # 2. Общий сканер всех сборочных файлов third-party на предмет CMake
+    for root, dirs, files in os.walk(tp_dir):
+        for file in files:
+            if file in ("BUILD", "BUILD.bazel") or file.endswith(".sh"):
+                fpath = os.path.join(root, file)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        txt = f.read()
+                    changed = False
+                    
+                    # Фикс порядка PATH для CMAKE_DIR
+                    if 'PATH="$$PATH:$$CMAKE_DIR' in txt:
+                        txt = re.sub(r'PATH="(\${1,2}PATH):(\${1,2}CMAKE_DIR/[^"]+)"', r'PATH="\2:\1"', txt)
+                        changed = True
+                    if 'PATH="$PATH:$CMAKE_DIR' in txt:
+                        txt = re.sub(r'PATH="(\$PATH):(\$CMAKE_DIR/[^"]+)"', r'PATH="\2:\1"', txt)
+                        changed = True
+
+                    # Добавление CMAKE_POLICY_VERSION_MINIMUM=3.5
+                    if "cmake .." in txt and "CMAKE_POLICY_VERSION_MINIMUM" not in txt:
+                        txt = txt.replace("cmake ..", "cmake .. -DCMAKE_POLICY_VERSION_MINIMUM=3.5")
+                        changed = True
+
+                    if changed:
+                        with open(fpath, "w", encoding="utf-8") as f:
+                            f.write(txt)
+                        log(f"CMake патч применен к {os.path.relpath(fpath, target_repo)}")
+                except Exception as e:
+                    pass
 
 def fix_apple_support_uuid(target_repo):
     log("Устранение флагов -Wl,-no_uuid в apple_support (фикс dyld missing LC_UUID на macOS 15)...")
@@ -307,8 +372,9 @@ def apply_all_modifications(target_repo):
     # 4. Удаление флагов -no_uuid в apple_support (фикс dyld missing LC_UUID)
     fix_apple_support_uuid(target_repo)
 
-    # 5. Патч mozjpeg для совместимости с CMake >= 3.31
+    # 5. Патч mozjpeg и yasm для совместимости с CMake >= 3.31
     patch_mozjpeg(target_repo)
+    patch_third_party_cmake(target_repo)
 
     # 6. Создание и настройка configuration-repository для Bazel
     setup_configuration_repository(target_repo)
