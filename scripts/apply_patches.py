@@ -288,6 +288,9 @@ def patch_clang_warnings_and_werror(target_repo):
                         new_content = new_content.replace("'-Werror'", "'-Wno-error'")
                     if "-warnings-as-errors" in new_content:
                         new_content = re.sub(r'["\']-warnings-as-errors["\']\s*,?', '', new_content)
+                    if 'minimum_os_version = "12.0"' in new_content or "minimum_os_version = '12.0'" in new_content:
+                        new_content = new_content.replace('minimum_os_version = "12.0"', 'minimum_os_version = "13.0"')
+                        new_content = new_content.replace("minimum_os_version = '12.0'", "minimum_os_version = '13.0'")
                     if new_content != content:
                         with open(fpath, "w", encoding="utf-8") as f:
                             f.write(new_content)
@@ -449,6 +452,41 @@ extension _AdaptedPostboxEncoder.UnkeyedContainer {
             with open(p_path, "w", encoding="utf-8") as f:
                 f.write(content)
             log("encode(_ value: Data) вынесен в extension в AdaptedPostboxUnkeyedEncodingContainer.swift")
+
+def patch_ios13_protocol_availability(target_repo):
+    log("Патч доступности протоколов iOS 13+ (ASAuthorizationControllerDelegate) под Swift 6...")
+    submodules_dir = os.path.join(target_repo, "submodules")
+    if not os.path.isdir(submodules_dir):
+        return
+    count = 0
+    for root, dirs, files in os.walk(submodules_dir):
+        for file in files:
+            if file.endswith(".swift"):
+                fpath = os.path.join(root, file)
+                try:
+                    with open(fpath, "r", encoding="utf-8", errors="ignore") as f:
+                        c = f.read()
+                    if "ASAuthorizationControllerDelegate" in c:
+                        m = re.search(r'class\s+([A-Za-z0-9_]+)\s*:[^{]+?\bASAuthorizationControllerDelegate\b', c)
+                        if m:
+                            cls_name = m.group(1)
+                            # Убираем протоколы из заголовка класса
+                            c = re.sub(r',\s*ASAuthorizationControllerDelegate', '', c)
+                            c = re.sub(r'ASAuthorizationControllerDelegate\s*,\s*', '', c)
+                            c = re.sub(r',\s*ASAuthorizationControllerPresentationContextProviding', '', c)
+                            c = re.sub(r'ASAuthorizationControllerPresentationContextProviding\s*,\s*', '', c)
+                            c += f"""\n
+@available(iOS 13.0, *)
+extension {cls_name}: ASAuthorizationControllerDelegate, ASAuthorizationControllerPresentationContextProviding {{
+}}
+"""
+                            with open(fpath, "w", encoding="utf-8") as f:
+                                f.write(c)
+                            log(f"Перенесены ASAuthorizationControllerDelegate в @available extension для {cls_name} в {os.path.relpath(fpath, target_repo)}")
+                            count += 1
+                except Exception:
+                    pass
+    log(f"ASAuthorizationControllerDelegate патч применен к {count} файлам.")
 
 def setup_metal_toolchain(target_repo):
     log("Настройка Metal Toolchain для компиляции шейдеров (Xcode 16)...")
@@ -615,6 +653,7 @@ def configure_bazelrc(target_repo):
         "build --//Telegram:disableProvisioningProfiles",
         "build --//Telegram:disableExtensions",
         "build --//Telegram:disableStripping",
+        "build --ios_minimum_os=13.0",
         "build --copt=-Wno-error",
         "build --copt=-Wno-gnu-folding-constant",
         "build --copt=-Wno-vla-extension",
@@ -719,6 +758,9 @@ def apply_all_modifications(target_repo):
 
     # 10. Патч Postbox AdaptedPostboxUnkeyedEncodingContainer под Swift 6 / iOS 18
     patch_postbox_encoding_container(target_repo)
+
+    # 10.1 Патч доступности протоколов iOS 13+ (ASAuthorizationControllerDelegate) под Swift 6
+    patch_ios13_protocol_availability(target_repo)
 
     # 11. Установка и настройка Metal Toolchain под Xcode 16
     setup_metal_toolchain(target_repo)
